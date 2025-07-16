@@ -2,6 +2,7 @@ package blocklist
 
 import (
 	"context"
+	"strings"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/metrics"
@@ -9,37 +10,29 @@ import (
 	"github.com/coredns/coredns/request"
 
 	"github.com/miekg/dns"
-
-	"strings"
 )
 
 var log = clog.NewWithPlugin("blocklist")
 
 type Blocklist struct {
-	blockDomains  map[string]bool
-	allowDomains  map[string]bool
-	Next          plugin.Handler
-	domainMetrics bool
-	blockResponse int
+	blockDomains      map[string]bool
+	allowDomains      map[string]bool
+	Next              plugin.Handler
+	domainMetrics     bool
+	blockResponse     int
+	blocklistLocation string
+	allowlistLocation string
+	bootStrapDNS      string
 }
 
-func NewBlocklistPlugin(next plugin.Handler, blockDomains []string, allowDomains []string, domainMetrics bool, blockResponse int) Blocklist {
-
-	log.Debugf(
-		"Creating blocklist plugin with %d blocks, %d allows, domain metrics set to %v, and a block response code of %d",
-		len(blockDomains),
-		len(allowDomains),
-		domainMetrics,
-		blockResponse,
-	)
-
-	return Blocklist{
-		blockDomains:  toMap(blockDomains),
-		allowDomains:  toMap(allowDomains),
-		Next:          next,
-		domainMetrics: domainMetrics,
-		blockResponse: blockResponse,
+func New() *Blocklist {
+	b := &Blocklist{
+		blockDomains:  make(map[string]bool),
+		allowDomains:  make(map[string]bool),
+		domainMetrics: false,
+		blockResponse: dns.RcodeNameError,
 	}
+	return b
 }
 
 // ServeDNS handles processing the DNS query in relation to the blocklist
@@ -64,7 +57,6 @@ func (b Blocklist) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 			resp := new(dns.Msg)
 			resp.SetRcode(r, b.blockResponse)
 			err := w.WriteMsg(resp)
-
 			if err != nil {
 				log.Errorf("failed to write block for %s, %v+", state.Name(), err)
 			}
@@ -124,6 +116,25 @@ func inList(name string, domainList map[string]bool) bool {
 	}
 
 	return inList
+}
+
+func (b Blocklist) readBlocklist() {
+	blocklist, err := loadList(b.blocklistLocation, b.bootStrapDNS)
+	if err != nil {
+		return // plugin.Error("blocklist", err)
+	}
+
+	b.blockDomains = toMap(blocklist)
+	log.Infof("Loaded blocklist with %d entries", len(b.blockDomains))
+
+	if b.allowlistLocation != "" {
+		allowlist, err := loadList(b.allowlistLocation, b.bootStrapDNS)
+		if err != nil {
+			return // plugin.Error("blocklist", err)
+		}
+		b.allowDomains = toMap(allowlist)
+		log.Infof("Loaded allowlist with %d entries", len(b.allowDomains))
+	}
 }
 
 func (b Blocklist) Name() string { return "blocklist" }

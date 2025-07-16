@@ -16,7 +16,7 @@ func TestSetupInvalidConfig(t *testing.T) {
 	assert.EqualError(
 		t,
 		err,
-		"plugin/blocklist: Missing url or path to blocklist.",
+		"plugin/blocklist: Testfile:1 - Error during parsing: Wrong argument count or unexpected line ending after 'blocklist'",
 	)
 
 	c = caddy.NewTestController("dns", `blocklist example/blocklist.txt example/blocklist.txt`)

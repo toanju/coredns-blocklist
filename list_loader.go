@@ -3,6 +3,7 @@ package blocklist
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -11,19 +12,18 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/coredns/caddy"
 )
 
-func loadList(c *caddy.Controller, location string, bootStrapDNS string) ([]string, error) {
+func loadList(location string, bootStrapDNS string) ([]string, error) {
 	log.Infof("Loading from %s", location)
 	if strings.HasPrefix(location, "http://") || strings.HasPrefix(location, "https://") {
-		return loadListFromUrl(c, location, bootStrapDNS)
+		return loadListFromUrl(location, bootStrapDNS)
 	}
-	return loadListFromFile(c, location)
+
+	return loadListFromFile(location)
 }
 
-func loadListFromUrl(c *caddy.Controller, name string, bootStrapDNS string) ([]string, error) {
+func loadListFromUrl(name string, bootStrapDNS string) ([]string, error) {
 	client := &http.Client{}
 	if bootStrapDNS != "" {
 		client = customDNS(bootStrapDNS)
@@ -68,13 +68,11 @@ func customDNS(bootStrapDNS string) *http.Client {
 	return client
 }
 
-func loadListFromFile(c *caddy.Controller, name string) ([]string, error) {
+func loadListFromFile(name string) ([]string, error) {
 	if !filepath.IsAbs(name) {
-		name = filepath.Join(
-			filepath.Dir(c.File()),
-			name,
-		)
+		return nil, fmt.Errorf("filepath is not absolute: %s", name)
 	}
+
 	readFile, err := os.Open(name)
 	if err != nil {
 		return nil, err
@@ -98,7 +96,7 @@ func collectDomains(r io.Reader, name string) ([]string, error) {
 }
 
 func toMap(domains []string) map[string]bool {
-	domainsMap := map[string]bool{}
+	domainsMap := make(map[string]bool)
 	fullLineCommentRegex := regexp.MustCompile(`^[ ]*#`)
 	inlineCommentRegex := regexp.MustCompile(`[ ]*#.*$`)
 	for _, line := range domains {

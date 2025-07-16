@@ -1,8 +1,10 @@
 package blocklist
 
 import (
-	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
@@ -14,75 +16,36 @@ import (
 func init() { plugin.Register("blocklist", setup) }
 
 func setup(c *caddy.Controller) error {
-	for c.Next() {
-		domainMetrics := false
-		var blocklistLocation string
-		var allowlistLocation string
-		var allowlist []string
-		var blockResponse string
-		var bootStrapDNS string
-		c.Args(&blocklistLocation)
+	bl, err := parseBlocklist(c)
+	if err != nil {
+		return plugin.Error("blocklist", err)
+	}
 
-		if blocklistLocation == "" {
-			return plugin.Error("blocklist", errors.New("Missing url or path to blocklist."))
+	for i := range bl {
+		b := bl[i]
+
+		if i == len(bl)-1 {
+			// last blocklist
+
+			dnsserver.GetConfig(c).
+				AddPlugin(func(next plugin.Handler) plugin.Handler {
+					b.Next = next
+					return b
+				})
+		} else {
+			nextBlocklist := bl[i+1]
+
+			dnsserver.GetConfig(c).
+				AddPlugin(func(next plugin.Handler) plugin.Handler {
+					b.Next = nextBlocklist
+					return b
+				})
 		}
 
-		for c.NextBlock() {
-			option := c.Val()
-			switch option {
-			case "allowlist":
-				remaining := c.RemainingArgs()
-				if len(remaining) != 1 {
-					return plugin.Error("blocklist", errors.New("allowlist requires a single argument."))
-				}
-
-				allowlistLocation = remaining[0]
-				log.Debugf("Setting allowlist location to %s", allowlistLocation)
-			case "domain_metrics":
-				domainMetrics = true
-			case "bootstrap_dns":
-				bootStrapDNS = c.RemainingArgs()[0]
-			case "block_response":
-				remaining := c.RemainingArgs()
-				if len(remaining) != 1 {
-					return plugin.Error("blocklist", errors.New("block_response requires a single argument."))
-				}
-
-				blockResponse = remaining[0]
-				log.Debugf("Setting block response code to %s", blockResponse)
-			default:
-				return plugin.Error("blocklist", c.Errf("unexpected '%v' command", option))
-			}
-		}
-
-		if c.NextArg() {
-			return plugin.Error("blocklist", errors.New("To many arguments for blocklist."))
-		}
-
-		blocklist, err := loadList(c, blocklistLocation, bootStrapDNS)
-		if err != nil {
-			return plugin.Error("blocklist", err)
-		}
-
-		if allowlistLocation != "" {
-			allowlist, err = loadList(c, allowlistLocation, bootStrapDNS)
-			if err != nil {
-				return plugin.Error("blocklist", err)
-			}
-		}
-
-		if blockResponse == "" {
-			blockResponse = "nxdomain"
-		}
-		blockResponseCode, err := getBlockResponseCode(blockResponse)
-		if err != nil {
-			return plugin.Error("blocklist", err)
-		}
-
-		dnsserver.GetConfig(c).
-			AddPlugin(func(next plugin.Handler) plugin.Handler {
-				return NewBlocklistPlugin(next, blocklist, allowlist, domainMetrics, blockResponseCode)
-			})
+		c.OnStartup(func() error {
+			b.readBlocklist()
+			return nil
+		})
 	}
 
 	return nil
@@ -97,4 +60,101 @@ func getBlockResponseCode(blockResponse string) (int, error) {
 	default:
 		return 0, fmt.Errorf("unknown response code '%s', must be either 'nxdomain' or 'refused'", blockResponse)
 	}
+}
+
+func parseBlocklist(c *caddy.Controller) ([]*Blocklist, error) {
+	bl := []*Blocklist{}
+
+	for c.Next() {
+		b, err := parseStanza(c)
+		if err != nil {
+			return nil, err
+		}
+		bl = append(bl, b)
+	}
+
+	return bl, nil
+}
+
+func checkFileorURL(file string, rootdir string) (string, error) {
+	_, err := url.ParseRequestURI(file)
+	if err == nil {
+		return file, nil
+	}
+
+	if !filepath.IsAbs(file) && rootdir != "" {
+		file = filepath.Join(rootdir, file)
+	}
+	s, err := os.Stat(file)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("unable to access hosts file '%s': %v", file, err)
+		}
+		log.Warningf("File does not exist: %s", file)
+	}
+	if s != nil && s.IsDir() {
+		log.Warningf("Hosts file %q is a directory", file)
+	}
+
+	return file, nil
+}
+
+func parseStanza(c *caddy.Controller) (*Blocklist, error) {
+	b := New()
+	config := dnsserver.GetConfig(c)
+
+	if !c.Args(&b.blocklistLocation) {
+		return b, c.ArgErr()
+	}
+
+	// check blocklist location
+	filename, err := checkFileorURL(b.blocklistLocation, config.Root)
+	if err != nil {
+		return b, err
+	}
+
+	b.blocklistLocation = filename
+
+	for c.NextBlock() {
+		option := c.Val()
+		switch option {
+		case "allowlist":
+			remaining := c.RemainingArgs()
+			if len(remaining) != 1 {
+				return b, fmt.Errorf("allowlist requires a single argument.")
+			}
+
+			b.allowlistLocation = remaining[0]
+			// check if file or url and check reachability
+			b.allowlistLocation, err = checkFileorURL(b.allowlistLocation, config.Root)
+			if err != nil {
+				return b, err
+			}
+
+			log.Debugf("Setting allowlist location to %s", b.allowlistLocation)
+		case "domain_metrics":
+			b.domainMetrics = true
+		case "bootstrap_dns":
+			b.bootStrapDNS = c.RemainingArgs()[0]
+		case "block_response":
+			remaining := c.RemainingArgs()
+			if len(remaining) != 1 {
+				return b, fmt.Errorf("block_response requires a single argument.")
+			}
+
+			blockResponseCode, err := getBlockResponseCode(remaining[0])
+			if err != nil {
+				return b, err
+			}
+			b.blockResponse = blockResponseCode
+		default:
+			return b, fmt.Errorf("unexpected '%v' command", option)
+		}
+	}
+
+	if c.NextArg() {
+		return b, fmt.Errorf("To many arguments for blocklist.")
+	}
+
+	return b, nil
 }
