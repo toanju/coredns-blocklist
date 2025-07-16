@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
@@ -15,6 +16,28 @@ import (
 
 func init() { plugin.Register("blocklist", setup) }
 
+func periodicHostsUpdate(bl *Blocklist) chan bool {
+	parseChan := make(chan bool)
+
+	if bl.reload == 0 {
+		return parseChan
+	}
+
+	go func() {
+		ticker := time.NewTicker(bl.reload)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-parseChan:
+				return
+			case <-ticker.C:
+				bl.readBlocklist()
+			}
+		}
+	}()
+	return parseChan
+}
+
 func setup(c *caddy.Controller) error {
 	bl, err := parseBlocklist(c)
 	if err != nil {
@@ -23,6 +46,8 @@ func setup(c *caddy.Controller) error {
 
 	for i := range bl {
 		b := bl[i]
+
+		parseChan := periodicHostsUpdate(b)
 
 		if i == len(bl)-1 {
 			// last blocklist
@@ -46,6 +71,11 @@ func setup(c *caddy.Controller) error {
 			b.readBlocklist()
 			return nil
 		})
+
+		c.OnShutdown(func() error {
+			close(parseChan)
+			return nil
+	  })
 	}
 
 	return nil
@@ -147,6 +177,19 @@ func parseStanza(c *caddy.Controller) (*Blocklist, error) {
 				return b, err
 			}
 			b.blockResponse = blockResponseCode
+		case "reload":
+			remaining := c.RemainingArgs()
+			if len(remaining) != 1 {
+				return b, c.Errf("reload needs a duration (zero seconds to disable)")
+			}
+			reload, err := time.ParseDuration(remaining[0])
+			if err != nil {
+				return b, c.Errf("invalid duration for reload '%s'", remaining[0])
+			}
+			if reload < 0 {
+				return b, c.Errf("invalid negative duration for reload '%s'", remaining[0])
+			}
+			b.reload = reload
 		default:
 			return b, fmt.Errorf("unexpected '%v' command", option)
 		}

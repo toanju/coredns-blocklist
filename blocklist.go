@@ -3,6 +3,8 @@ package blocklist
 import (
 	"context"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/metrics"
@@ -14,21 +16,27 @@ import (
 
 var log = clog.NewWithPlugin("blocklist")
 
+type syncMap struct {
+	sync.RWMutex
+	m map[string]bool
+}
+
 type Blocklist struct {
-	blockDomains      map[string]bool
-	allowDomains      map[string]bool
+	blockDomains      *syncMap
+	allowDomains      *syncMap
 	Next              plugin.Handler
 	domainMetrics     bool
 	blockResponse     int
 	blocklistLocation string
 	allowlistLocation string
 	bootStrapDNS      string
+	reload            time.Duration
 }
 
 func New() *Blocklist {
 	b := &Blocklist{
-		blockDomains:  make(map[string]bool),
-		allowDomains:  make(map[string]bool),
+		blockDomains:  &syncMap{m: make(map[string]bool)},
+		allowDomains:  &syncMap{m: make(map[string]bool)},
 		domainMetrics: false,
 		blockResponse: dns.RcodeNameError,
 	}
@@ -96,7 +104,7 @@ func (b Blocklist) shouldBlock(name string) (isBlocked bool, isAllowed bool) {
 	return isBlocked, isAllowed
 }
 
-func inList(name string, domainList map[string]bool) bool {
+func inList(name string, domainList *syncMap) bool {
 	inList := false
 
 	nameParts := strings.Split(name, ".")
@@ -110,7 +118,11 @@ func inList(name string, domainList map[string]bool) bool {
 			n = "."
 		}
 
-		if _, inList = domainList[n]; inList {
+		domainList.RLock()
+		_, inList = domainList.m[n]
+		domainList.RUnlock()
+
+		if inList {
 			break
 		}
 	}
@@ -123,17 +135,24 @@ func (b Blocklist) readBlocklist() {
 	if err != nil {
 		return // plugin.Error("blocklist", err)
 	}
+	newBlockdomains := toMap(blocklist)
+	log.Infof("Loaded blocklist with %d entries", len(newBlockdomains))
 
-	b.blockDomains = toMap(blocklist)
-	log.Infof("Loaded blocklist with %d entries", len(b.blockDomains))
+	b.blockDomains.Lock()
+	b.blockDomains.m = newBlockdomains
+	b.blockDomains.Unlock()
 
 	if b.allowlistLocation != "" {
 		allowlist, err := loadList(b.allowlistLocation, b.bootStrapDNS)
 		if err != nil {
 			return // plugin.Error("blocklist", err)
 		}
-		b.allowDomains = toMap(allowlist)
-		log.Infof("Loaded allowlist with %d entries", len(b.allowDomains))
+		newAllowdomains := toMap(allowlist)
+		log.Infof("Loaded allowlist with %d entries", len(newAllowdomains))
+
+		b.allowDomains.Lock()
+		b.allowDomains.m = newAllowdomains
+		b.allowDomains.Unlock()
 	}
 }
 

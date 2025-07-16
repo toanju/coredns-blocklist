@@ -20,7 +20,8 @@ func NextHandler() test.Handler {
 }
 
 func TestExample(t *testing.T) {
-	x := Blocklist{Next: test.NextHandler(dns.RcodeSuccess, nil)}
+	x := New()
+	x.Next = test.NextHandler(dns.RcodeSuccess, nil)
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -36,7 +37,10 @@ func TestExample(t *testing.T) {
 }
 
 func TestAllowedDomain(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"bad.domain.": true}, allowDomains: map[string]bool{"good.domain.": true}}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"bad.domain.": true}}
+	x.allowDomains = &syncMap{m: map[string]bool{"good.domain.": true}}
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -53,7 +57,9 @@ func TestAllowedDomain(t *testing.T) {
 }
 
 func TestBlockedDomain(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"bad.domain.": true}}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"bad.domain.": true}}
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -70,7 +76,9 @@ func TestBlockedDomain(t *testing.T) {
 }
 
 func TestBlockedParentDomain(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"bad.domain.": true}}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"bad.domain.": true}}
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -87,7 +95,9 @@ func TestBlockedParentDomain(t *testing.T) {
 }
 
 func TestBlockedChildDomain(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"child.bad.domain.": true}}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"child.bad.domain.": true}}
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -104,7 +114,9 @@ func TestBlockedChildDomain(t *testing.T) {
 }
 
 func TestBlockedRoot(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{".": true}}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{".": true}}
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -121,7 +133,10 @@ func TestBlockedRoot(t *testing.T) {
 }
 
 func TestAllowedDomainWithBlockedParentDomain(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"bad.domain.": true}, allowDomains: map[string]bool{"sub.good.domain.": true}}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"bad.domain.": true}}
+	x.allowDomains = &syncMap{m: map[string]bool{"sub.good.domain.": true}}
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -140,7 +155,10 @@ func TestAllowedDomainWithBlockedParentDomain(t *testing.T) {
 func TestBlockedDomainWithAllowedParentDomain(t *testing.T) {
 	// This test should succeed, as the allowlist always takes precedence, even with a more-specific
 	// block in place
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"sub.bad.domain.": true}, allowDomains: map[string]bool{"good.domain.": true}}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"sub.bad.domain.": true}}
+	x.allowDomains = &syncMap{m: map[string]bool{"good.domain.": true}}
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -157,7 +175,11 @@ func TestBlockedDomainWithAllowedParentDomain(t *testing.T) {
 }
 
 func TestAllowedDomainWithDomainMetrics(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"bad.domain.": true}, allowDomains: map[string]bool{"allow.bad.domain.": true}, domainMetrics: true}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"bad.domain.": true}}
+	x.allowDomains = &syncMap{m: map[string]bool{"allow.bad.domain.": true}}
+	x.domainMetrics = true
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -174,7 +196,10 @@ func TestAllowedDomainWithDomainMetrics(t *testing.T) {
 }
 
 func TestBlockedDomainWithDomainMetrics(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"bad.domain.": true}, domainMetrics: true}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"bad.domain.": true}}
+	x.domainMetrics = true
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -191,7 +216,9 @@ func TestBlockedDomainWithDomainMetrics(t *testing.T) {
 }
 
 func TestBlockedLocalhostStillAllowed(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"localhost.": true}}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"localhost.": true}}
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -208,7 +235,10 @@ func TestBlockedLocalhostStillAllowed(t *testing.T) {
 }
 
 func TestBlockedDomainWithNxdomain(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"bad.domain.": true}, blockResponse: dns.RcodeNameError}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"bad.domain.": true}}
+	x.blockResponse = dns.RcodeNameError
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
@@ -225,7 +255,10 @@ func TestBlockedDomainWithNxdomain(t *testing.T) {
 }
 
 func TestBlockedDomainWithRefused(t *testing.T) {
-	x := Blocklist{Next: NextHandler(), blockDomains: map[string]bool{"bad.domain.": true}, blockResponse: dns.RcodeRefused}
+	x := New()
+	x.Next = NextHandler()
+	x.blockDomains = &syncMap{m: map[string]bool{"bad.domain.": true}}
+	x.blockResponse = dns.RcodeRefused
 
 	b := &bytes.Buffer{}
 	golog.SetOutput(b)
